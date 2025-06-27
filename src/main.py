@@ -97,8 +97,7 @@ def run_hedge_fund(run_id: str, ticker: str, start_date: str, end_date: str, por
                 enhanced_state = get_enhanced_final_state()
                 print_summary_report(enhanced_state)
 
-            if HAS_STRUCTURED_OUTPUT and show_reasoning:
-                print_structured_output(final_state)
+            print_structured_output(final_state)
     except ImportError:
         final_state = app.invoke(initial_state)
         print(f"--- Finished Workflow Run ID: {run_id} ---")
@@ -108,8 +107,7 @@ def run_hedge_fund(run_id: str, ticker: str, start_date: str, end_date: str, por
             enhanced_state = get_enhanced_final_state()
             print_summary_report(enhanced_state)
 
-        if HAS_STRUCTURED_OUTPUT and show_reasoning:
-            print_structured_output(final_state)
+        print_structured_output(final_state)
         try:
             api_state.complete_run(run_id, "completed")
         except Exception:

@@ -38,20 +38,19 @@ if os.path.exists(env_path):
 else:
     logger.warning(f"{ERROR_ICON} 未找到环境变量文件: {env_path}")
 
-# 验证环境变量
-api_key = os.getenv("GEMINI_API_KEY")
-model = os.getenv("GEMINI_MODEL")
-
-if not api_key:
-    logger.error(f"{ERROR_ICON} 未找到 GEMINI_API_KEY 环境变量")
-    raise ValueError("GEMINI_API_KEY not found in environment variables")
-if not model:
-    model = "gemini-1.5-flash"
-    logger.info(f"{WAIT_ICON} 使用默认模型: {model}")
-
-# 初始化 Gemini 客户端
-client = genai.Client(api_key=api_key)
-logger.info(f"{SUCCESS_ICON} Gemini 客户端初始化成功")
+# Gemini 客户端和相关配置的延迟初始化
+def get_gemini_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    model = os.getenv("GEMINI_MODEL")
+    if not api_key:
+        logger.error(f"{ERROR_ICON} 未找到 GEMINI_API_KEY 环境变量")
+        raise ValueError("GEMINI_API_KEY not found in environment variables")
+    if not model:
+        model = "gemini-1.5-flash"
+        logger.info(f"{WAIT_ICON} 使用默认模型: {model}")
+    client = genai.Client(api_key=api_key)
+    logger.info(f"{SUCCESS_ICON} Gemini 客户端初始化成功")
+    return client, model
 
 
 @backoff.on_exception(
@@ -62,8 +61,11 @@ logger.info(f"{SUCCESS_ICON} Gemini 客户端初始化成功")
     giveup=lambda e: "AFC is enabled" not in str(e)
 )
 def generate_content_with_retry(model, contents, config=None):
-    """带重试机制的内容生成函数"""
+    """带重试机制的内容生成函数（仅 Gemini 使用）"""
     try:
+        client, used_model = get_gemini_client()
+        if model is None:
+            model = used_model
         logger.info(f"{WAIT_ICON} 正在调用 Gemini API...")
         logger.debug(f"请求内容: {contents}")
         logger.debug(f"请求配置: {config}")

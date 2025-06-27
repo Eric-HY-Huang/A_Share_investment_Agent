@@ -226,6 +226,7 @@ def portfolio_management_agent(state: AgentState):
             "error": "Failed to parse LLM decision JSON from portfolio manager",
             "raw_response_snippet": llm_response_content[:200] + "..."
         }
+        logger.error(f"Failed to parse LLM decision JSON. Raw response: {llm_response_content[:200]}...")
 
     show_workflow_status(f"{agent_name}: --- Portfolio Manager Completed ---")
 

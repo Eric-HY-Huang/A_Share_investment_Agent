@@ -3,7 +3,7 @@ import time
 import backoff
 from abc import ABC, abstractmethod
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import OpenAI, AzureOpenAI
 from google import genai
 from src.utils.logging_config import setup_logger, SUCCESS_ICON, ERROR_ICON, WAIT_ICON
 
@@ -241,6 +241,97 @@ class OpenAICompatibleClient(LLMClient):
             return None
 
 
+class AzureClient(LLMClient):
+    """通过 openai.AzureOpenAI 调用 Azure OpenAI 的客户端（使用 API Key）"""
+
+    def __init__(self, endpoint=None, deployment=None, api_version=None, api_key=None):
+        self.endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
+        self.deployment = deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT")
+        self.api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
+        self.api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
+
+        if not self.endpoint:
+            logger.error(f"{ERROR_ICON} 未找到 AZURE_OPENAI_ENDPOINT 环境变量")
+            raise ValueError("AZURE_OPENAI_ENDPOINT not found in environment variables")
+        if not self.deployment:
+            logger.error(f"{ERROR_ICON} 未找到 AZURE_OPENAI_DEPLOYMENT 环境变量")
+            raise ValueError("AZURE_OPENAI_DEPLOYMENT not found in environment variables")
+        if not self.api_key:
+            logger.error(f"{ERROR_ICON} 未找到 AZURE_OPENAI_API_KEY 环境变量")
+            raise ValueError("AZURE_OPENAI_API_KEY not found in environment variables")
+
+        self.client = AzureOpenAI(
+            api_key=self.api_key,
+            api_version=self.api_version,
+            azure_endpoint=self.endpoint
+        )
+        logger.info(f"{SUCCESS_ICON} AzureClient (AzureOpenAI) 初始化成功")
+
+    @backoff.on_exception(
+        backoff.expo,
+        (Exception,),
+        max_tries=5,
+        max_time=300
+    )
+    def call_api_with_retry(self, messages):
+        """带重试机制的 API 调用函数"""
+        try:
+            logger.info(f"{WAIT_ICON} 正在调用 Azure OpenAI (via openai.AzureOpenAI)...")
+            logger.debug(f"请求内容: {messages}")
+
+            response = self.client.chat.completions.create(
+                model=self.deployment,  # Azure uses deployment name as model
+                messages=messages
+            )
+
+            logger.info(f"{SUCCESS_ICON} API 调用成功")
+            return response
+        except Exception as e:
+            logger.error(f"{ERROR_ICON} API 调用失败: {str(e)}")
+            raise e
+
+    def get_completion(self, messages, max_retries=3, initial_retry_delay=1, **kwargs):
+        """获取聊天完成结果，包含重试逻辑"""
+        try:
+            logger.info(f"{WAIT_ICON} 使用 Azure OpenAI (via openai.AzureOpenAI) 部署: {self.deployment}")
+            logger.debug(f"消息内容: {messages}")
+
+            for attempt in range(max_retries):
+                try:
+                    response = self.call_api_with_retry(messages)
+                    if response is None:
+                        logger.warning(
+                            f"{ERROR_ICON} 尝试 {attempt + 1}/{max_retries}: API 返回空值")
+                        if attempt < max_retries - 1:
+                            retry_delay = initial_retry_delay * (2 ** attempt)
+                            logger.info(
+                                f"{WAIT_ICON} 等待 {retry_delay} 秒后重试...")
+                            time.sleep(retry_delay)
+                            continue
+                        return None
+
+                    # openai response
+                    content = response.choices[0].message.content
+                    logger.debug(f"API 原始响应: {content[:500]}...")
+                    logger.info(f"{SUCCESS_ICON} 成功获取 Azure OpenAI 响应")
+                    return content
+
+                except Exception as e:
+                    logger.error(
+                        f"{ERROR_ICON} 尝试 {attempt + 1}/{max_retries} 失败: {str(e)}")
+                    if attempt < max_retries - 1:
+                        retry_delay = initial_retry_delay * (2 ** attempt)
+                        logger.info(f"{WAIT_ICON} 等待 {retry_delay} 秒后重试...")
+                        time.sleep(retry_delay)
+                    else:
+                        logger.error(f"{ERROR_ICON} 最终错误: {str(e)}")
+                        return None
+
+        except Exception as e:
+            logger.error(f"{ERROR_ICON} get_completion 发生错误: {str(e)}")
+            return None
+
+
 class LLMClientFactory:
     """LLM 客户端工厂类"""
 
@@ -250,7 +341,7 @@ class LLMClientFactory:
         创建 LLM 客户端
 
         Args:
-            client_type: 客户端类型 ("auto", "gemini", "openai_compatible")
+            client_type: 客户端类型 ("auto", "gemini", "openai_compatible", "semantic_kernel_azure")
             **kwargs: 特定客户端的配置参数
 
         Returns:
@@ -263,6 +354,11 @@ class LLMClientFactory:
                (os.getenv("OPENAI_COMPATIBLE_API_KEY") and os.getenv("OPENAI_COMPATIBLE_BASE_URL") and os.getenv("OPENAI_COMPATIBLE_MODEL")):
                 client_type = "openai_compatible"
                 logger.info(f"{WAIT_ICON} 自动选择 OpenAI Compatible API")
+            # 检查是否提供了 Azure OpenAI 相关配置（需要 API KEY）
+            elif (kwargs.get("endpoint") and kwargs.get("deployment") and kwargs.get("api_key")) or \
+                 (os.getenv("AZURE_OPENAI_ENDPOINT") and os.getenv("AZURE_OPENAI_DEPLOYMENT") and os.getenv("AZURE_OPENAI_API_KEY")):
+                client_type = "semantic_kernel_azure"
+                logger.info(f"{WAIT_ICON} 自动选择 Azure OpenAI (via Semantic Kernel)")
             else:
                 client_type = "gemini"
                 logger.info(f"{WAIT_ICON} 自动选择 Gemini API")
@@ -277,6 +373,13 @@ class LLMClientFactory:
                 api_key=kwargs.get("api_key"),
                 base_url=kwargs.get("base_url"),
                 model=kwargs.get("model")
+            )
+        elif client_type == "semantic_kernel_azure":
+            return AzureClient(
+                endpoint=kwargs.get("endpoint"),
+                deployment=kwargs.get("deployment"),
+                api_version=kwargs.get("api_version"),
+                api_key=kwargs.get("api_key")
             )
         else:
             raise ValueError(f"不支持的客户端类型: {client_type}")

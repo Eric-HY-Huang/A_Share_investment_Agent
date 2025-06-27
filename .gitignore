@@ -82,3 +82,4 @@ test/
 test*
 src/crawler/*.ts
 *.json
+CODE_ANALYTICS.md
